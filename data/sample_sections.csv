@@ -1,0 +1,11 @@
+course_id,section_id,teacher,campus,times
+MATH101,MATH101-A,Li,East,1-1;1-2;3-1;3-2
+MATH101,MATH101-B,Wang,West,1-3;1-4;3-3;3-4
+CS101,CS101-A,Zhang,East,1-1;1-2;4-3;4-4
+CS101,CS101-B,Liu,Main,1-5;1-6;4-3;4-4
+ECON101,ECON101-A,Chen,Main,2-1;2-2;4-1;4-2
+ECON101,ECON101-B,Zhao,East,2-5;2-6;4-1;4-2
+PHY101,PHY101-A,Sun,West,3-5;3-6
+PHY101,PHY101-B,He,East,3-3;3-4
+ENG101,ENG101-A,Guo,Main,5-3;5-4
+ENG101,ENG101-B,Liang,East,5-1;5-2
