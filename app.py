@@ -2,64 +2,66 @@ import pandas as pd
 import streamlit as st
 
 from src.time_utils import parse_times
+from src.conflict_graph import Section, build_conflict_graph, edges_with_reasons
 
 st.set_page_config(page_title="CourseGraph", layout="wide")
-st.title("CourseGraph：Phase 1（数据导入 + 时间解析）")
+st.title("CourseGraph：Phase 2（冲突判定 + 冲突图构建）")
 
-st.write(
-    """
-    目标：
-    1) 从 CSV 读取 section 数据
-    2) 将 times 字符串（如 '1-1;1-2;3-3'）解析为离散时间块集合 times={(day, block)}
-    """
-)
-
-# ---- Load data ----
 DATA_PATH = "data/sample_sections.csv"
 
-try:
-    df = pd.read_csv(DATA_PATH)
-except FileNotFoundError:
-    st.error(f"找不到文件：{DATA_PATH}。请确认你创建了 data/sample_sections.csv")
-    st.stop()
+# ---- Load data ----
+df = pd.read_csv(DATA_PATH)
 
 required_cols = {"course_id", "section_id", "teacher", "campus", "times"}
 missing = required_cols - set(df.columns)
 if missing:
-    st.error(f"CSV 缺少列：{sorted(missing)}。需要列：{sorted(required_cols)}")
-    st.stop()
+  st.error(f"CSV 缺少列：{sorted(missing)}")
+  st.stop()
 
-st.subheader("原始 CSV 数据")
+# ---- Parse into Section objects ----
+sections = []
+for _, row in df.iterrows():
+  s = Section(
+    course_id=str(row["course_id"]),
+    section_id=str(row["section_id"]),
+    teacher=str(row["teacher"]),
+    campus=str(row["campus"]),
+    times=parse_times(str(row["times"])),
+  ) 
+  sections.append(s)
+
+st.subheader("原始数据（sections）")
 st.dataframe(df, width="stretch")
 
-# ---- Parse times ----
-st.subheader("解析后的 times（集合形式）")
+# ---- Build conflict graph ----
+G = build_conflict_graph(sections)
 
-parsed_times = []
-parse_errors = 0
+st.subheader("冲突图统计（Graph Stats）")
+col1, col2, col3 = st.columns(3)
+col1.metric("节点数（sections）", G.number_of_nodes())
+col2.metric("边数（冲突边）", G.number_of_edges())
+col3.metric("平均度数（avg degree）", round(sum(dict(G.degree()).values()) / max(1, G.number_of_nodes()), 2))
 
-for idx, row in df.iterrows():
-    try:
-        times_set = parse_times(str(row["times"]))
-        parsed_times.append(times_set)
-    except Exception as e:
-        parse_errors += 1
-        parsed_times.append(set())
-        st.warning(f"第 {idx} 行 times 解析失败：{row['times']!r}，错误：{e}")
-
-df2 = df.copy()
-df2["times_set"] = parsed_times
-
-st.dataframe(df2, width="stretch")
-
-if parse_errors == 0:
-    st.success("✅ Phase 1 完成：CSV 读取成功，times 全部解析成功。")
+# ---- Show conflict edges with reasons ----
+st.subheader("冲突边列表（带原因：重叠的 day-block）")
+edges = edges_with_reasons(G)
+if len(edges) == 0:
+  st.success("没有检测到冲突边（这通常意味着样例数据没有时间重叠）。")
 else:
-    st.error(f"❌ 有 {parse_errors} 行 times 解析失败，请修正 CSV 再试。")
+  edges_df = pd.DataFrame(edges)
+  st.dataframe(edges_df, width="stretch")
 
-# ---- Quick sanity checks ----
-st.subheader("快速检查（你应该能看懂的几个例子）")
-example = df2.iloc[0]
-st.write(f"Example section: **{example['section_id']}**")
-st.write(f"times string: `{example['times']}`")
-st.write(f"times_set: `{example['times_set']}`")
+# ---- Simple query: pick a section and show its conflicts ----
+st.subheader("点选一个 section，看它和谁冲突（以及冲突原因）")
+all_sections = sorted(list(G.nodes()))
+picked = st.selectbox("选择 section", all_sections)
+
+neighbors = list(G.neighbors(picked))
+if not neighbors:
+  st.info(f"{picked} 没有与任何 section 冲突。")
+else:
+  rows = []
+  for nb in neighbors:
+    reason = G.edges[picked, nb].get("reason", [])
+    rows.append({"conflicts_with": nb, "reason": reason})
+  st.dataframe(pd.DataFrame(rows), width="stretch")
