@@ -2,11 +2,12 @@ import pandas as pd
 import streamlit as st
 
 from src.time_utils import parse_times
-from src.conflict_graph import Section, build_conflict_graph, edges_with_reasons
+from src.conflict_graph import Section, build_conflict_graph
 from src.solver import find_top_k_solutions
+from src.scoring import Weights, score_solution
 
 st.set_page_config(page_title="CourseGraph", layout="wide")
-st.title("CourseGraph：Phase 3（Top-3 可行方案：回溯 + 剪枝）")
+st.title("CourseGraph：Phase 4（偏好评分 + Top-3 智能排序）")
 
 DATA_PATH = "data/sample_sections.csv"
 
@@ -19,80 +20,105 @@ if missing:
   st.error(f"CSV 缺少列：{sorted(missing)}")
   st.stop()
 
-# ---- Parse into Section objects ----
 sections = []
 for _, row in df.iterrows():
-  s = Section(
-    course_id=str(row["course_id"]),
-    section_id=str(row["section_id"]),
-    teacher=str(row["teacher"]),
-    campus=str(row["campus"]),
-    times=parse_times(str(row["times"])),
-  )
-  sections.append(s)
-
-st.subheader("原始数据（sections）")
-st.dataframe(df, width="stretch")
-
-# ---- Phase 2: Build conflict graph ----
-G = build_conflict_graph(sections)
-
-with st.expander("Phase 2：冲突图统计与冲突边列表（点击展开）", expanded=False):
-  col1, col2, col3 = st.columns(3)
-  col1.metric("节点数（sections）", G.number_of_nodes())
-  col2.metric("边数（冲突边）", G.number_of_edges())
-  col3.metric(
-    "平均度数（avg degree）",
-    round(sum(dict(G.degree()).values()) / max(1, G.number_of_nodes()), 2),
+  sections.append(
+    Section(
+      course_id=str(row["course_id"]),
+      section_id=str(row["section_id"]),
+      teacher=str(row["teacher"]),
+      campus=str(row["campus"]),
+      times=parse_times(str(row["times"])),
+    )
   )
 
-  edges = edges_with_reasons(G)
-  if len(edges) == 0:
-    st.success("没有检测到冲突边（这通常意味着样例数据没有时间重叠）。")
-  else:
-    st.dataframe(pd.DataFrame(edges), width="stretch")
-
-  st.write("点选一个 section，看它和谁冲突（以及冲突原因）")
-  all_sections = sorted(list(G.nodes()))
-  picked = st.selectbox("选择 section", all_sections)
-  neighbors = list(G.neighbors(picked))
-  if not neighbors:
-    st.info(f"{picked} 没有与任何 section 冲突。")
-  else:
-    rows = []
-    for nb in neighbors:
-      reason = G.edges[picked, nb].get("reason", [])
-      rows.append({"conflicts_with": nb, "reason": reason})
-    st.dataframe(pd.DataFrame(rows), width="stretch")
-
-# ---- Phase 3: Build candidates_by_course ----
+# ---- Build candidates ----
 candidates_by_course = {}
 for s in sections:
   candidates_by_course.setdefault(s.course_id, []).append(s)
 
-st.subheader("Phase 3：生成 Top-3 可行选课方案（每门课选一个 section，且时间不冲突）")
-st.caption("算法：回溯（Backtracking）+ 剪枝（MRV：候选最少的课优先）")
+# ---- Sidebar: preferences ----
+st.sidebar.header("偏好设置（Weights & Teacher Preference）")
 
-k = st.slider("输出方案数量（Top-k）", min_value=1, max_value=5, value=3, step=1)
+w_teacher = st.sidebar.slider("老师偏好权重", 0.0, 5.0, 2.0, 0.5)
+w_early = st.sidebar.slider("不早八惩罚权重", 0.0, 5.0, 1.5, 0.5)
+w_night = st.sidebar.slider("不晚课惩罚权重", 0.0, 5.0, 1.0, 0.5)
+w_compact = st.sidebar.slider("集中上课权重", 0.0, 5.0, 1.0, 0.5)
+w_cross = st.sidebar.slider("少跨区惩罚权重", 0.0, 5.0, 1.0, 0.5)
 
-solutions = find_top_k_solutions(candidates_by_course, k=k)
+weights = Weights(
+  w_teacher=w_teacher,
+  w_early=w_early,
+  w_night=w_night,
+  w_compact=w_compact,
+  w_cross=w_cross,
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("老师偏好（简单版：给老师打分）")
+
+teachers = sorted({s.teacher for s in sections})
+teacher_pref = {}
+for t in teachers:
+  teacher_pref[t] = st.sidebar.slider(f"{t} 偏好分", 0.0, 5.0, 3.0, 0.5)
+
+# ---- Phase 2 (optional stats) ----
+G = build_conflict_graph(sections)
+with st.expander("冲突图统计", expanded=False):
+  col1, col2 = st.columns(2)
+  col1.metric("节点数（sections）", G.number_of_nodes())
+  col2.metric("边数（冲突边）", G.number_of_edges())
+
+# ---- Phase 3: generate feasible solutions ----
+st.subheader("先生成可行解（硬约束：不冲突）")
+k_candidates = st.slider("先生成多少个可行解候选（越大越可能找到更高分方案）", 1, 30, 10, 1)
+
+solutions = find_top_k_solutions(candidates_by_course, k=k_candidates)
 
 if len(solutions) == 0:
-  st.error("没有找到任何可行方案（可能是数据冲突太多或必须选的课太多）。")
-else:
-  st.success(f"找到 {len(solutions)} 个可行方案（最多 {k} 个）。")
+  st.error("没有找到任何可行方案（数据冲突太多）。")
+  st.stop()
 
-  for idx, sol in enumerate(solutions, start=1):
-    st.markdown(f"### 方案 #{idx}")
-    rows = []
-    for course_id, sec in sol.chosen_by_course.items():
-      rows.append(
-        {
-          "course_id": course_id,
-          "section_id": sec.section_id,
-          "teacher": sec.teacher,
-          "campus": sec.campus,
-          "times": sorted(list(sec.times)),
-        }
-      )
-    st.dataframe(pd.DataFrame(rows), width="stretch")
+st.success(f"已生成 {len(solutions)} 个可行候选解。接下来按偏好评分并选 Top-3。")
+
+# ---- Phase 4: score and rank ----
+scored = []
+for sol in solutions:
+  breakdown = score_solution(sol, weights=weights, teacher_pref=teacher_pref)
+  scored.append((breakdown.total, breakdown, sol))
+
+scored.sort(key=lambda x: x[0], reverse=True)
+
+top_n = 3
+top = scored[: min(top_n, len(scored))]
+
+st.subheader("Top-3 推荐方案（软约束：偏好优化 + 分项解释）")
+
+for rank, (total, breakdown, sol) in enumerate(top, start=1):
+  st.markdown(f"## 推荐方案 #{rank}  —  总分：{total:.2f}")
+
+  # show breakdown
+  bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns(5)
+  bcol1.metric("老师分", f"{breakdown.teacher_score:.1f}")
+  bcol2.metric("早八惩罚", f"-{breakdown.early_penalty:.0f}")
+  bcol3.metric("晚课惩罚", f"-{breakdown.night_penalty:.0f}")
+  bcol4.metric("集中分", f"+{breakdown.compact_score:.0f}")
+  bcol5.metric("跨区惩罚", f"-{breakdown.cross_penalty:.0f}")
+
+  # show chosen sections
+  rows = []
+  for course_id, sec in sol.chosen_by_course.items():
+    rows.append(
+      {
+        "course_id": course_id,
+        "section_id": sec.section_id,
+        "teacher": sec.teacher,
+        "campus": sec.campus,
+        "times": sorted(list(sec.times)),
+      }
+    )
+  st.dataframe(pd.DataFrame(rows), width="stretch")
+
+st.caption(
+    "说明：我们先用回溯生成若干可行候选解（硬约束），再用加权评分函数排序（软约束），输出Top-3。"
+)
