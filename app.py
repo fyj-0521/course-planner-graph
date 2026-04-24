@@ -102,6 +102,12 @@ st.subheader("Top-3 推荐方案（点击节点可查看解释）")
 labels = [f"推荐方案 #{i+1}（总分 {top[i][0]:.2f}）" for i in range(top_n)]
 picked_idx = st.radio("选择要查看解释的方案", options=list(range(top_n)), format_func=lambda i: labels[i])
 total, breakdown, sol = top[picked_idx]
+# clear previous chosen node when switching
+prev_idx = st.session_state.get("prev_picked_idx", None)
+if prev_idx is None or prev_idx != picked_idx:
+    st.session_state["selected_section_id"] = None
+st.session_state["prev_picked_idx"] = picked_idx
+
 chosen_ids = {sec.section_id for sec in sol.chosen_by_course.values()}
 
 # Tow-column layout
@@ -169,6 +175,7 @@ with left:
   
   selected = st.session_state.get("selected_section_id", None)
   
+
   st.markdown("### 当前方案课表")
 
   grid = {(b, d): [] for b in range(1, 7) for d in range(1, 6)}
@@ -261,10 +268,16 @@ with left:
 
 with right:
   st.markdown("### 方案解释")
+
   # Explanation panel
   ex = explain_solution(sol, weights=weights, teacher_pref=teacher_pref)
   for b in ex.bullets:
     st.write(f"- {b}")
+  
+  st.markdown(" ")
+  if st.button("清空选择"):
+    st.session_state["selected_section_id"] = None
+    selected = None
 
   st.markdown("---")
   st.markdown("### 点击图上的节点后：解释为什么没选它")
