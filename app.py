@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from streamlit_agraph import agraph, Node, Edge, Config
 
@@ -10,8 +11,10 @@ from src.scoring import Weights, score_solution
 from src.explain import explain_solution, explain_why_section_not_chosen
 # from src.cyto_html import build_cytoscape_html
 
+from copy import deepcopy
+
 st.set_page_config(page_title="CourseGraph", layout="wide")
-st.title("CourseGraph：Phase 5B（可解释推荐 + Cytospace 交互式冲突视图）")
+st.title("CourseGraph：Phase 5C（可解释推荐 + 交互式冲突视图 + 可视化课表）")
 
 DATA_PATH = "data/sample_sections.csv"
 
@@ -106,7 +109,7 @@ left, right = st.columns([1.15, 1])
 
 with left:
   st.markdown("### 冲突图")
-  st.caption("蓝色节点=当前方案选中的 section；点击节点会在右侧显示解释。")
+  st.caption("大节点=当前方案选中的 section；点击节点会在右侧显示解释。")
   # ---- Build agraph nodes/edges ----
   nodes = []
   for n, data in G.nodes(data=True):
@@ -166,22 +169,94 @@ with left:
   
   selected = st.session_state.get("selected_section_id", None)
   
-  st.write(f"当前选中节点：{selected if selected else '（未选中）'}")
+  st.markdown("### 当前方案课表")
 
-  st.markdown("### 当前方案的选课结果")
-  # Show chosen schedule
-  rows = []
-  for course_id, sec in sol.chosen_by_course.items():
-    rows.append(
-      {
-        "course_id": course_id,
-        "section_id": sec.section_id,
-        "teacher": sec.teacher,
-        "campus": sec.campus,
-        "times": sorted(list(sec.times)),
-      }
+  grid = {(b, d): [] for b in range(1, 7) for d in range(1, 6)}
+
+  for _, sec in sol.chosen_by_course.items():
+    for (d, b) in sec.times:
+      grid[(b, d)].append((sec.section_id, sec.teacher, sec.campus))
+
+  def cell_html(items):
+    if not items:
+      return ""
+    parts = []
+    for (src, teacher, campus) in items:
+      parts.append(
+        f"""
+        <div style="line-height:1.15; padding:2px 0;">
+          <div style="font-size:13px; font-weight:600;">{src} — {teacher}</div>
+          <div style="font-size:11px; color:#666;">@{campus}</div>
+        </div>
+        """
+      )
+    return "".join(parts)
+
+  header = "".join(
+    [f"<th style='padding:8px; border:1px solid #ddd;'>Day {d}</th>" for d in range(1, 6)]
+  )
+
+  rows_html = ""
+  for b in range(1, 7):
+    row_cells = "".join(
+      [
+        f"<td style='vertical-align:top; min-width:110px; padding:6px; border:1px solid #ddd;'>{cell_html(grid[(b, d)])}</td>"
+        for d in range(1, 6)
+      ]
     )
-  st.dataframe(pd.DataFrame(rows), width="stretch")
+    rows_html += f"""
+    <tr>
+      <th style='padding:8px; border:1px solid #ddd; background:#fafafa;'>Block {b}</th>
+      {row_cells}
+    </tr>
+    """
+
+  table_html = f"""
+  <!doctype html>
+  <html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {{
+        margin: 0;
+        padding: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+        color: #111;
+      }}
+      table {{
+        border-collapse: collapse;
+        width: 100%;
+        table-layout: fixed;
+        font-size: 14px;
+      }}
+      th, td {{
+        border: 1px solid #ddd;
+      }}
+      th {{
+        background: #fafafa;
+        font-weight: 600;
+      }}
+    </style>
+  </head>
+  <body>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th style='padding:8px;'> </th>
+            {header}
+          </tr>
+        </thead>
+        <tbody>
+          {rows_html}
+        </tbody>
+      </table>
+    </div>
+  </body>
+  </html>
+  """
+
+  components.html(table_html, height=420, scrolling=True)
 
 
 with right:
